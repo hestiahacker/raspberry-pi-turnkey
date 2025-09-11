@@ -7,6 +7,7 @@ import json
 import time
 import os
 import socket
+from shutil import which
 import requests
 
 from flask import Flask, request, send_from_directory, jsonify, render_template, redirect
@@ -74,6 +75,7 @@ def windowscaptive():
 
 def check_cred(ssid, password):
     '''Validates ssid and password and returns True if valid and False if not valid'''
+    valid_psk=False
     wpadir = currentdir + '/wpa/'
     testconf = wpadir + 'test.conf'
     wpalog = wpadir + 'wpa.log'
@@ -106,32 +108,44 @@ def check_cred(ssid, password):
 
     stop_ap(True)
 
-    result = subprocess.check_output(['wpa_supplicant',
-                                      "-Dnl80211",
-                                      "-iwlan0",
-                                      "-c/" + testconf,
-                                      "-f", wpalog,
-                                      "-B",
-                                      "-P", wpapid])
+    if which("nmcli") is not None:
+        # If we have nmcli, we prefer that over doing things manually
+        result = subprocess.check_output(['nmcli',
+                                          'device',
+                                          'wifi',
+                                          'connect',
+                                          ssid,
+                                          'password',
+                                          password])
+        if b"successfully activated" in result:
+            valid_psk=True
+    else:
+        result = subprocess.check_output(['wpa_supplicant',
+                                          "-Dnl80211",
+                                          "-iwlan0",
+                                          "-c/" + testconf,
+                                          "-f", wpalog,
+                                          "-B",
+                                          "-P", wpapid])
 
-    checkwpa = True
-    while checkwpa:
-        with open(wpalog, 'r') as f:
-            content = f.read()
-            if success in content:
-                valid_psk = True
-                checkwpa = False
-            elif fail in content:
-                valid_psk = False
-                checkwpa = False
-            else:
-                continue
+        checkwpa = True
+        while checkwpa:
+            with open(wpalog, 'r') as f:
+                content = f.read()
+                if success in content:
+                    valid_psk = True
+                    checkwpa = False
+                elif fail in content:
+                    valid_psk = False
+                    checkwpa = False
+                else:
+                    continue
 
-    # Kill wpa_supplicant to stop it from setting up dhcp, dns
-    with open(wpapid, 'r') as p:
-        pid = p.read()
-        pid = int(pid.strip())
-        os.kill(pid, signal.SIGTERM)
+        # Kill wpa_supplicant to stop it from setting up dhcp, dns
+        with open(wpapid, 'r') as p:
+            pid = p.read()
+            pid = int(pid.strip())
+            os.kill(pid, signal.SIGTERM)
 
     stop_ap(False) # Restart services
     return valid_psk
