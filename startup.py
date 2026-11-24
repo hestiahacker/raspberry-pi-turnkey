@@ -22,7 +22,15 @@ def getssid():
     if len(ssid_list) > 0:
         return ssid_list
     ssid_list = []
-    get_ssid_list = subprocess.check_output(('iw', 'dev', 'wlan0', 'scan', 'ap-force'))
+    try:
+        get_ssid_list = subprocess.check_output(('iw', 'dev', 'wlan0', 'scan', 'ap-force'),
+                                                stderr=subprocess.DEVNULL)
+    except (subprocess.CalledProcessError, OSError):
+        try:
+            get_ssid_list = subprocess.check_output(('iw', 'dev', 'wlan0', 'scan'),
+                                                    stderr=subprocess.DEVNULL)
+        except (subprocess.CalledProcessError, OSError):
+            get_ssid_list = b''  # fall back to the last known SSID below
     ssids = get_ssid_list.splitlines()
     for s in ssids:
         s = s.strip().decode('utf-8')
@@ -33,6 +41,16 @@ def getssid():
             except:
                 pass
     print(ssid_list)
+    if not ssid_list:
+        # A scan can fail while hostapd owns the radio; at least offer the
+        # network we were connected to before.
+        try:
+            old = open('wpa.conf', 'r').read()
+            hit = re.search(r'ssid\s*=\s*"?([^"\n]+)"?', old)
+            if hit:
+                ssid_list.append(hit.group(1).strip())
+        except OSError:
+            pass
     ssid_list = sorted(list(set(ssid_list)))
     return ssid_list
 
@@ -94,13 +112,15 @@ def check_cred(ssid, password):
         f.write(result.decode('utf-8'))
 
     def stop_ap(stop):
-        if stop:
-            # Services need to be stopped to free up wlan0 interface
-            print(subprocess.check_output(['systemctl', "stop", "hostapd", "dnsmasq", "dhcpcd"]))
-        else:
-            print(subprocess.check_output(['systemctl', "restart", "dnsmasq", "dhcpcd"]))
+        # dhcpcd only exists on older versions of Debian; on newer ones, the
+        # WiFi interface is managed by systemd-networkd instead.  Never let a
+        # missing unit break the sign-in form.
+        units = ['hostapd', 'dnsmasq'] + (['dhcpcd'] if stop else [])
+        for unit in units:
+            subprocess.call(['systemctl', 'stop' if stop else 'start', unit],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if not stop:
             time.sleep(15)
-            print(subprocess.check_output(['systemctl', "restart", "hostapd"]))
 
     # Sentences to check for
     fail = "pre-shared key may be incorrect"
@@ -157,7 +177,9 @@ def send_static(path):
 @app.route('/signin', methods=['POST'])
 def signin():
     email = request.form['email']
-    ssid = request.form['ssid']
+    # The template offers a scanned list plus a free-text box for hidden or
+    # not-yet-scanned networks.
+    ssid = request.form.get('ssid_manual', '').strip() or request.form.get('ssid', '')
     password = request.form['password']
 
     pwd = 'psk="' + password + '"'
@@ -179,10 +201,17 @@ def signin():
     return render_template('index.html', message="Please wait 2 minutes to connect.")
 
 def wificonnected():
-    result = subprocess.check_output(['iwconfig', 'wlan0'])
-    matches = re.findall(r'\"(.+?)\"', result.split(b'\n')[0].decode('utf-8'))
-    if len(matches) > 0:
-        print("got connected to " + matches[0])
+    # iwconfig reports an ESSID even while hostapd is running in AP mode,
+    # which would make the portal think it was online and hide the form.
+    # `iw dev ... link` only reports a real station association.
+    try:
+        out = subprocess.check_output(['iw', 'dev', 'wlan0', 'link'],
+                                      stderr=subprocess.DEVNULL).decode('utf-8', 'replace')
+    except (subprocess.CalledProcessError, OSError):
+        return False
+    match = re.search(r'^\s*SSID:\s*(.+?)\s*$', out, re.MULTILINE)
+    if match:
+        print("got connected to " + match.group(1))
         return True
     return False
 

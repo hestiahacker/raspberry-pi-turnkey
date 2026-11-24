@@ -1,0 +1,4 @@
+# Fallback used when wpa_supplicant.service cannot be stopped (non-systemd
+# systems).  No networks, so it cannot associate with AP mode active.
+ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+update_config=1

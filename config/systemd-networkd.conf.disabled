@@ -1,0 +1,8 @@
+# Client mode: let networkd obtain an address once wpa.conf is restored.
+# Installed as /etc/systemd/network/00-turnkey-wlan0.network by disable_ap.sh.
+[Match]
+Name=wlan0
+
+[Network]
+DHCP=yes
+IPv6AcceptRA=yes
