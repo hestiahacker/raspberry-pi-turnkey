@@ -1,0 +1,19 @@
+# Installed as /etc/systemd/system/turnkey.service by setup-turnkey.sh.
+[Unit]
+Description=Raspberry Pi Turnkey WiFi provisioning
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/pi/scripts/raspberry-pi-turnkey
+# Re-apply AP mode at boot without rebooting (no-op unless status.json says hostapd).
+ExecStartPre=/home/pi/scripts/raspberry-pi-turnkey/enable_ap.sh --no-reboot
+ExecStart=/usr/bin/python3 /home/pi/scripts/raspberry-pi-turnkey/startup.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
