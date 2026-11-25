@@ -17,12 +17,16 @@ os.chdir(currentdir)
 
 # Written by setup-turnkey.sh; keeps every interface reference in sync.
 WLAN = 'wlan0'
+NO_AP_SCAN = False
 try:
     with open('/etc/default/turnkey') as f:
         for line in f:
-            if line.startswith('WLAN='):
-                WLAN = line.split('=', 1)[1].strip().strip('"\'')
-                break
+            key, _, value = line.strip().partition('=')
+            value = value.strip().strip('"\'')
+            if key == 'WLAN':
+                WLAN = value
+            elif key == 'NO_AP_SCAN':
+                NO_AP_SCAN = value in ('1', 'true', 'yes')
 except OSError:
     pass
 
@@ -31,29 +35,30 @@ def getssid():
     global ssid_list
     if len(ssid_list) > 0:
         return ssid_list
-    ssid_list = []
-    try:
-        get_ssid_list = subprocess.check_output(('iw', 'dev', WLAN, 'scan', 'ap-force'),
-                                                stderr=subprocess.DEVNULL)
-    except (subprocess.CalledProcessError, OSError):
+
+    if NO_AP_SCAN:
+        # enable_ap.sh saves this list before hostapd starts; never scan here.
         try:
-            get_ssid_list = subprocess.check_output(('iw', 'dev', WLAN, 'scan'),
+            ssid_list = [line.strip() for line in open('ap_ssids.txt') if line.strip()]
+        except OSError:
+            ssid_list = []
+    else:
+        try:
+            get_ssid_list = subprocess.check_output(('iw', 'dev', WLAN, 'scan', 'ap-force'),
                                                     stderr=subprocess.DEVNULL)
         except (subprocess.CalledProcessError, OSError):
-            get_ssid_list = b''  # fall back to the last known SSID below
-    ssids = get_ssid_list.splitlines()
-    for s in ssids:
-        s = s.strip().decode('utf-8')
-        if s.startswith("SSID"):
-            a = s.split(": ")
             try:
-                ssid_list.append(a[1])
-            except:
-                pass
-    print(ssid_list)
+                get_ssid_list = subprocess.check_output(('iw', 'dev', WLAN, 'scan'),
+                                                        stderr=subprocess.DEVNULL)
+            except (subprocess.CalledProcessError, OSError):
+                get_ssid_list = b''
+        for s in get_ssid_list.splitlines():
+            s = s.strip().decode('utf-8', 'replace')
+            if s.startswith('SSID:'):
+                ssid_list.append(s.split(':', 1)[1].strip())
+
     if not ssid_list:
-        # A scan can fail while hostapd owns the radio; at least offer the
-        # network we were connected to before.
+        # No scan/cache result: at least offer the saved network.
         try:
             old = open('wpa.conf', 'r').read()
             hit = re.search(r'ssid\s*=\s*"?([^"\n]+)"?', old)

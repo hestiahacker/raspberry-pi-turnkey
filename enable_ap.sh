@@ -75,6 +75,22 @@ install_config() {
     fi
 }
 
+# Some firmware asserts if scanned while hostapd owns the radio.  When the
+# installer disables AP-mode scans, collect the list beforehand instead.
+scan_before_ap() {
+    [ "${NO_AP_SCAN:-0}" = 1 ] || return 0
+    systemctl is-active --quiet hostapd.service && return 0
+    $SUDO ip link set "$WLAN" up >/dev/null 2>&1 || true
+    local raw
+    if raw="$($SUDO iw dev "$WLAN" scan 2>/dev/null)"; then
+        printf '%s\n' "$raw" |
+            sed -n 's/^[[:space:]]*SSID:[[:space:]]*//p' |
+            sort -u > ap_ssids.txt
+    fi
+}
+
+scan_before_ap
+
 # wpa_supplicant must not associate while hostapd owns the radio.
 stop_supplicants
 

@@ -6,7 +6,7 @@
 #   git clone https://github.com/hestiahacker/raspberry-pi-turnkey.git \
 #       /home/pi/scripts/raspberry-pi-turnkey
 #   cd /home/pi/scripts/raspberry-pi-turnkey
-#   sudo ./setup-turnkey.sh [wifi-interface]   # --dry-run previews the changes
+#   sudo ./setup-turnkey.sh [wifi-interface] [--dry-run] [--no-ap-scan]
 #
 # Everything written outside the repo except /etc/default/turnkey is a verbatim
 # copy of a file in config/.  This script never switches WiFi into AP mode, so
@@ -20,6 +20,7 @@ TURNKEY_DEFAULT="/etc/default/turnkey"
 PI_USER="pi"
 WLAN="wlan0"
 DRY_RUN=0
+NO_AP_SCAN=0
 
 log()  { printf '\n[*] %s\n' "$*"; }
 warn() { printf '\n[!] %s\n' "$*" >&2; }
@@ -44,17 +45,21 @@ run_quiet() {
 
 usage() {
     cat <<'USAGE'
-Usage: sudo ./setup-turnkey.sh [WIFI_INTERFACE] [--dry-run]
+Usage: sudo ./setup-turnkey.sh [WIFI_INTERFACE] [--dry-run] [--no-ap-scan]
 
   WIFI_INTERFACE  Optional AP interface; defaults to wlan0.
 
   --dry-run       Show what would be changed; write nothing.
+
+  --no-ap-scan    For chipsets that assert when scanned in AP mode: scan before
+                  AP startup only, and show the saved list in the portal.
 USAGE
 }
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --dry-run) DRY_RUN=1; shift ;;
+        --no-ap-scan) NO_AP_SCAN=1; shift ;;
         -h|--help) usage; exit 0 ;;
         -*)        die "unknown argument: $1 (try --help)" ;;
         *)         [ "$WLAN" = wlan0 ] || die "only one WiFi interface may be given (try --help)"
@@ -116,13 +121,14 @@ install_configs() {
 
 install_wlan_default() {
     # enable_ap.sh, disable_ap.sh and startup.py all read this file.
-    log "Recording WiFi interface: $WLAN"
+    log "Recording WiFi interface: $WLAN (AP scan disabled: $NO_AP_SCAN)"
     if [ "$DRY_RUN" -eq 1 ]; then
-        printf '    (dry-run) write %s: WLAN=%s\n' "$TURNKEY_DEFAULT" "$WLAN"
+        printf '    (dry-run) write %s: WLAN=%s NO_AP_SCAN=%s\n' \
+            "$TURNKEY_DEFAULT" "$WLAN" "$NO_AP_SCAN"
         return
     fi
     install -d -m 0755 /etc/default
-    printf 'WLAN=%s\n' "$WLAN" > "$TURNKEY_DEFAULT"
+    printf 'WLAN=%s\nNO_AP_SCAN=%s\n' "$WLAN" "$NO_AP_SCAN" > "$TURNKEY_DEFAULT"
     chmod 0644 "$TURNKEY_DEFAULT"
 }
 
