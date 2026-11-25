@@ -6,7 +6,6 @@ import re
 import json
 import time
 import os
-import socket
 from shutil import which
 import requests
 
@@ -16,6 +15,17 @@ app = Flask(__name__, static_url_path='')
 currentdir = os.path.dirname(os.path.abspath(__file__))
 os.chdir(currentdir)
 
+# Written by setup-turnkey.sh; keeps every interface reference in sync.
+WLAN = 'wlan0'
+try:
+    with open('/etc/default/turnkey') as f:
+        for line in f:
+            if line.startswith('WLAN='):
+                WLAN = line.split('=', 1)[1].strip().strip('"\'')
+                break
+except OSError:
+    pass
+
 ssid_list = []
 def getssid():
     global ssid_list
@@ -23,11 +33,11 @@ def getssid():
         return ssid_list
     ssid_list = []
     try:
-        get_ssid_list = subprocess.check_output(('iw', 'dev', 'wlan0', 'scan', 'ap-force'),
+        get_ssid_list = subprocess.check_output(('iw', 'dev', WLAN, 'scan', 'ap-force'),
                                                 stderr=subprocess.DEVNULL)
     except (subprocess.CalledProcessError, OSError):
         try:
-            get_ssid_list = subprocess.check_output(('iw', 'dev', 'wlan0', 'scan'),
+            get_ssid_list = subprocess.check_output(('iw', 'dev', WLAN, 'scan'),
                                                     stderr=subprocess.DEVNULL)
         except (subprocess.CalledProcessError, OSError):
             get_ssid_list = b''  # fall back to the last known SSID below
@@ -70,14 +80,35 @@ ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
 update_config=1
 """
 
+AP_PROFILE_ADDRESS = '192.168.4.1'
 
 
-@app.route('/')
-def main():
+def client_ip(interface=WLAN):
+    """Return a usable client address, ignoring the AP's static profile."""
+    try:
+        out = subprocess.check_output(
+            ['ip', '-4', '-o', 'addr', 'show', interface],
+            stderr=subprocess.DEVNULL).decode('utf-8', 'replace')
+    except (subprocess.CalledProcessError, OSError):
+        return None
+    for line in out.splitlines():
+        fields = line.split()
+        if len(fields) >= 4 and fields[2] == 'inet':
+            address = fields[3].split('/')[0]
+            if address == AP_PROFILE_ADDRESS or address.startswith('169.254.'):
+                continue
+            return address
+    return None
+
+
+def portal_page():
     piid = open('pi.id', 'r').read().strip()
     return render_template('index.html', ssids=getssid())
 
-# Captive portal when connected with iOS or Android
+@app.route('/')
+def main():
+    return portal_page()
+
 @app.route('/generate_204')
 def redirect204():
     return redirect("http://192.168.4.1", code=302)
@@ -142,7 +173,7 @@ def check_cred(ssid, password):
     else:
         result = subprocess.check_output(['wpa_supplicant',
                                           "-Dnl80211",
-                                          "-iwlan0",
+                                          "-i" + WLAN,
                                           "-c/" + testconf,
                                           "-f", wpalog,
                                           "-B",
@@ -203,16 +234,20 @@ def signin():
 def wificonnected():
     # iwconfig reports an ESSID even while hostapd is running in AP mode,
     # which would make the portal think it was online and hide the form.
-    # `iw dev ... link` only reports a real station association.
+    # `iw dev ... link` reports a station association, but a leftover
+    # wpa_supplicant can stay associated while networkd still holds the AP's
+    # 192.168.4.1 profile. Require a real client address as well.
     try:
-        out = subprocess.check_output(['iw', 'dev', 'wlan0', 'link'],
+        out = subprocess.check_output(['iw', 'dev', WLAN, 'link'],
                                       stderr=subprocess.DEVNULL).decode('utf-8', 'replace')
     except (subprocess.CalledProcessError, OSError):
         return False
     match = re.search(r'^\s*SSID:\s*(.+?)\s*$', out, re.MULTILINE)
-    if match:
+    if match and client_ip():
         print("got connected to " + match.group(1))
         return True
+    if match:
+        print("associated to " + match.group(1) + " but no usable client IP yet")
     return False
 
 if __name__ == "__main__":
@@ -233,10 +268,19 @@ if __name__ == "__main__":
     else:
         s = json.load(open('status.json'))
 
-    # check connection
-    if wificonnected():
+    # Check the connection. If we are associated but DHCP has not completed yet,
+    # give it a short grace period instead of immediately switching to AP mode.
+    connected = wificonnected()
+    if not connected and s.get('status') == 'connected':
+        for _ in range(6):
+            time.sleep(5)
+            connected = wificonnected()
+            if connected:
+                break
+
+    if connected:
         s['status'] = 'connected'
-    if not wificonnected():
+    if not connected:
         if s['status'] == 'connected': # Don't change if status in status.json is hostapd
             s['status'] = 'disconnected'
 
@@ -252,11 +296,9 @@ if __name__ == "__main__":
     elif s['status'] == 'connected':
         piid = open('pi.id', 'r').read().strip()
 
-        # get ip address
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ipaddress = s.getsockname()[0]
-        s.close()
+        # Get the address from WLAN itself. Opening a socket to 8.8.8.8 just
+        # to discover it crashes with "Network is unreachable" when offline.
+        ipaddress = client_ip() or 'unknown'
 
         # Run the startup script
         subprocess.Popen("./startup.sh")

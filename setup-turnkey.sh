@@ -6,16 +6,19 @@
 #   git clone https://github.com/hestiahacker/raspberry-pi-turnkey.git \
 #       /home/pi/scripts/raspberry-pi-turnkey
 #   cd /home/pi/scripts/raspberry-pi-turnkey
-#   sudo ./setup-turnkey.sh          # --dry-run previews the changes
+#   sudo ./setup-turnkey.sh [wifi-interface]   # --dry-run previews the changes
 #
-# Everything written outside the repo is a verbatim copy of a file in config/
-# This script never switches WiFi into AP mode, so you'll stay online.
+# Everything written outside the repo except /etc/default/turnkey is a verbatim
+# copy of a file in config/.  This script never switches WiFi into AP mode, so
+# you'll stay online.
 
 set -Eeuo pipefail
 
 EXPECTED_DIR="/home/pi/scripts/raspberry-pi-turnkey"
 SERVICE="/etc/systemd/system/turnkey.service"
+TURNKEY_DEFAULT="/etc/default/turnkey"
 PI_USER="pi"
+WLAN="wlan0"
 DRY_RUN=0
 
 log()  { printf '\n[*] %s\n' "$*"; }
@@ -41,9 +44,11 @@ run_quiet() {
 
 usage() {
     cat <<'USAGE'
-Usage: sudo ./setup-turnkey.sh [--dry-run]
+Usage: sudo ./setup-turnkey.sh [WIFI_INTERFACE] [--dry-run]
 
-  --dry-run   Show what would be changed; write nothing.
+  WIFI_INTERFACE  Optional AP interface; defaults to wlan0.
+
+  --dry-run       Show what would be changed; write nothing.
 USAGE
 }
 
@@ -51,9 +56,13 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage; exit 0 ;;
-        *)         die "unknown argument: $1 (try --help)" ;;
+        -*)        die "unknown argument: $1 (try --help)" ;;
+        *)         [ "$WLAN" = wlan0 ] || die "only one WiFi interface may be given (try --help)"
+                   WLAN="$1"; shift ;;
     esac
 done
+
+[[ "$WLAN" =~ ^[A-Za-z0-9_.-]+$ ]] || die "invalid WiFi interface name: $WLAN"
 
 check_repo() {
     [ "$(id -u)" -eq 0 ] || die "run this script as root (sudo ./setup-turnkey.sh)"
@@ -105,13 +114,30 @@ install_configs() {
     run install -D -m 0644 "$EXPECTED_DIR/config/turnkey.service" "$SERVICE"
 }
 
+install_wlan_default() {
+    # enable_ap.sh, disable_ap.sh and startup.py all read this file.
+    log "Recording WiFi interface: $WLAN"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        printf '    (dry-run) write %s: WLAN=%s\n' "$TURNKEY_DEFAULT" "$WLAN"
+        return
+    fi
+    install -d -m 0755 /etc/default
+    printf 'WLAN=%s\n' "$WLAN" > "$TURNKEY_DEFAULT"
+    chmod 0644 "$TURNKEY_DEFAULT"
+}
+
 enable_service() {
     log "Enabling turnkey.service..."
     run systemctl daemon-reload
     run systemctl enable turnkey.service
-    run_quiet systemctl enable wpa_supplicant@wlan0.service
-    # hostapd/dnsmasq are started on demand by enable_ap.sh, not at boot.
+    # netplan creates netplan-wpa-wlan0.service itself.  Do not also enable
+    # wpa_supplicant@wlan0.service or the two fight over the control socket.
+    # For a non-wlan0 AP interface, disable_ap.sh enables the interface-specific
+    # wpa_supplicant@<iface>.service after credentials are saved.
+    # hostapd is masked in client mode; enable_ap.sh unmasks it when AP mode is
+    # active. dnsmasq is only started on demand by enable_ap.sh as well.
     run_quiet systemctl disable hostapd.service dnsmasq.service
+    run_quiet systemctl mask hostapd.service
     run systemctl start turnkey.service || warn "turnkey.service failed to start; check journalctl -u turnkey"
 }
 
@@ -120,6 +146,7 @@ main() {
     ensure_pi_user
     install_packages
     install_configs
+    install_wlan_default
     # startup.py writes pi.id, status.json and wpa.conf into the checkout.
     run chown -R "${PI_USER}:${PI_USER}" "$EXPECTED_DIR"
     enable_service
@@ -130,7 +157,7 @@ main() {
     active="$(systemctl is-active turnkey.service 2>/dev/null || true)"
     echo "  service   : ${enabled:-unknown}/${active:-unknown}"
     echo "  status    : $(cat "$EXPECTED_DIR/status.json" 2>/dev/null || echo 'created on first start')"
-    echo "  WiFi link : $(iw dev wlan0 link 2>/dev/null | grep -m1 'SSID:' | sed 's/^[[:space:]]*//' || echo 'not associated')"
+    echo "  WiFi link : $(iw dev "$WLAN" link 2>/dev/null | grep -m1 'SSID:' | sed 's/^[[:space:]]*//' || echo 'not associated')"
     echo
     echo "If the board cannot reach its configured WiFi, turnkey starts the HESTIAPI"
     echo "access point automatically; join it and open http://192.168.4.1/ to set credentials."
