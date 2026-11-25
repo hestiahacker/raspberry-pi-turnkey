@@ -17,6 +17,8 @@ set -Eeuo pipefail
 EXPECTED_DIR="/home/pi/scripts/raspberry-pi-turnkey"
 SERVICE="/etc/systemd/system/turnkey.service"
 TURNKEY_DEFAULT="/etc/default/turnkey"
+KIOSK_OVERRIDE_DIR="/etc/systemd/system/kiosk.service.d"
+KIOSK_OVERRIDE="$KIOSK_OVERRIDE_DIR/turnkey.conf"
 PI_USER="pi"
 WLAN="wlan0"
 DRY_RUN=0
@@ -81,9 +83,9 @@ check_repo() {
         fi
     fi
     local f
-    for f in startup.py enable_ap.sh disable_ap.sh \
+    for f in startup.py enable_ap.sh disable_ap.sh wait-for-turnkey-status.sh \
              config/hostapd config/hostapd.conf config/dnsmasq.conf \
-             config/turnkey.service; do
+             config/turnkey.service config/kiosk-turnkey.conf; do
         [ -f "$here/$f" ] || die "missing $f in $here"
     done
 }
@@ -119,6 +121,15 @@ install_configs() {
     run install -D -m 0644 "$EXPECTED_DIR/config/turnkey.service" "$SERVICE"
 }
 
+install_kiosk_override() {
+    if ! systemctl cat kiosk.service >/dev/null 2>&1; then
+        log "kiosk.service not installed; skipping kiosk override"
+        return
+    fi
+    log "Making kiosk.service wait for turnkey.service..."
+    run install -D -m 0644 "$EXPECTED_DIR/config/kiosk-turnkey.conf" "$KIOSK_OVERRIDE"
+}
+
 install_wlan_default() {
     # enable_ap.sh, disable_ap.sh and startup.py all read this file.
     log "Recording WiFi interface: $WLAN (AP scan disabled: $NO_AP_SCAN)"
@@ -152,6 +163,7 @@ main() {
     ensure_pi_user
     install_packages
     install_configs
+    install_kiosk_override
     install_wlan_default
     # startup.py writes pi.id, status.json and wpa.conf into the checkout.
     run chown -R "${PI_USER}:${PI_USER}" "$EXPECTED_DIR"
