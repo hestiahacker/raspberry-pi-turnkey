@@ -1,8 +1,8 @@
 # Installed as /etc/systemd/system/turnkey.service by setup-turnkey.sh.
 [Unit]
 Description=Raspberry Pi Turnkey WiFi provisioning
-After=network-online.target
-Wants=network-online.target
+After=network.target
+Wants=network.target
 
 [Service]
 Type=simple

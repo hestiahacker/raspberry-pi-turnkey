@@ -259,7 +259,7 @@ if __name__ == "__main__":
         time.sleep(300)
     piid = open('pi.id', 'r').read().strip()
     print(piid)
-    time.sleep(15)
+    time.sleep(5)
     # get status
     s = {'status':'disconnected'}
     if not os.path.isfile('status.json'):
@@ -272,7 +272,8 @@ if __name__ == "__main__":
     # give it a short grace period instead of immediately switching to AP mode.
     connected = wificonnected()
     if not connected and s.get('status') == 'connected':
-        for _ in range(6):
+        # 3 x 5s still covers normal WPA + DHCP without delaying AP fallback much
+        for _ in range(3):
             time.sleep(5)
             connected = wificonnected()
             if connected:
