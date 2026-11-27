@@ -19,6 +19,8 @@ SERVICE="/etc/systemd/system/turnkey.service"
 TURNKEY_DEFAULT="/etc/default/turnkey"
 KIOSK_OVERRIDE_DIR="/etc/systemd/system/kiosk.service.d"
 KIOSK_OVERRIDE="$KIOSK_OVERRIDE_DIR/turnkey.conf"
+HOSTAPD_OVERRIDE_DIR="/etc/systemd/system/hostapd.service.d"
+HOSTAPD_OVERRIDE="$HOSTAPD_OVERRIDE_DIR/10-ap-interface.conf"
 PI_USER="pi"
 WLAN="wlan0"
 DRY_RUN=0
@@ -85,7 +87,8 @@ check_repo() {
     local f
     for f in startup.py enable_ap.sh disable_ap.sh wait-for-turnkey-status.sh \
              config/hostapd config/hostapd.conf config/dnsmasq.conf \
-             config/turnkey.service config/kiosk-turnkey.conf; do
+             config/turnkey.service config/kiosk-turnkey.conf \
+             config/hostapd-device.conf; do
         [ -f "$here/$f" ] || die "missing $f in $here"
     done
 }
@@ -113,12 +116,29 @@ install_packages() {
         hostapd dnsmasq python3-flask python3-requests wpasupplicant iw iproute2
 }
 
+# Copy a config file into place, adapting the shipped wlan0 name when needed.
+install_config() {
+    local src="$1" dest="$2"
+    if [ "$WLAN" = wlan0 ]; then
+        run install -D -m 0644 "$src" "$dest"
+        return
+    fi
+    if [ "$DRY_RUN" -eq 1 ]; then
+        printf '    (dry-run) install %s: wlan0 -> %s\n' "$dest" "$WLAN"
+        return
+    fi
+    install -d -m 0755 "$(dirname "$dest")"
+    sed "s/wlan0/$WLAN/g" "$src" > "$dest"
+    chmod 0644 "$dest"
+}
+
 install_configs() {
     log "Installing configuration from the checkout..."
     run install -D -m 0644 "$EXPECTED_DIR/config/hostapd.conf" /etc/hostapd/hostapd.conf
     run install -D -m 0644 "$EXPECTED_DIR/config/hostapd"      /etc/default/hostapd
     run install -D -m 0644 "$EXPECTED_DIR/config/dnsmasq.conf" /etc/dnsmasq.conf
     run install -D -m 0644 "$EXPECTED_DIR/config/turnkey.service" "$SERVICE"
+    install_config "$EXPECTED_DIR/config/hostapd-device.conf" "$HOSTAPD_OVERRIDE"
 }
 
 install_kiosk_override() {
