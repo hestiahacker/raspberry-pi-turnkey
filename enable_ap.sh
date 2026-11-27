@@ -15,6 +15,19 @@ WLAN="${WLAN:-wlan0}"
 SUDO=""
 [ "$(id -u)" -eq 0 ] || SUDO=sudo
 
+# startup.py and the kiosk wait helper can both request AP mode during boot.
+# Serialize them; two scripts fighting over hostapd can assert some firmware.
+lock=/run/lock/turnkey-enable-ap.lock
+if command -v flock >/dev/null 2>&1; then
+    $SUDO install -m 0666 /dev/null "$lock" >/dev/null 2>&1 || true
+    if exec 9>"$lock" 2>/dev/null; then
+        flock -n 9 || {
+            echo "turnkey: AP setup already in progress; skipping duplicate run" >&2
+            exit 0
+        }
+    fi
+fi
+
 NO_REBOOT=0
 [ "${1:-}" = "--no-reboot" ] && NO_REBOOT=1
 if [ "$NO_REBOOT" -eq 1 ] && ! grep -q hostapd status.json 2>/dev/null; then
