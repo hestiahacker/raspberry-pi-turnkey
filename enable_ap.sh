@@ -79,13 +79,35 @@ install_config() {
 # installer disables AP-mode scans, collect the list beforehand instead.
 scan_before_ap() {
     [ "${NO_AP_SCAN:-0}" = 1 ] || return 0
-    systemctl is-active --quiet hostapd.service && return 0
+
+    # Always leave a file behind on startup, even if the scan cannot run.
+    [ -e ap_ssids.txt ] || : > ap_ssids.txt
+
+    # hostapd owns the radio while active/activating; scanning then can assert
+    # the firmware.  Stop it and hold it masked until the existing unmask/start
+    # later in this script.
+    case "$(systemctl show -p ActiveState --value hostapd.service 2>/dev/null)" in
+        active|activating|reloading|deactivating)
+            $SUDO systemctl stop hostapd.service >/dev/null 2>&1 || true
+            sleep 1
+            ;;
+    esac
+    $SUDO systemctl mask hostapd.service >/dev/null 2>&1 || true
+
+    # At boot networkd configures wlan0 slightly after this script starts.
     $SUDO ip link set "$WLAN" up >/dev/null 2>&1 || true
+    for _ in 1 2 3 4 5; do
+        ip link show dev "$WLAN" up >/dev/null 2>&1 && break
+        sleep 1
+    done
+
     local raw
     if raw="$($SUDO iw dev "$WLAN" scan 2>/dev/null)"; then
         printf '%s\n' "$raw" |
             sed -n 's/^[[:space:]]*SSID:[[:space:]]*//p' |
             sort -u > ap_ssids.txt
+    else
+        echo "turnkey: WiFi scan failed; ap_ssids.txt left unchanged" >&2
     fi
 }
 
